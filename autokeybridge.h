@@ -19,6 +19,10 @@
     interface org.autokey.KWinBridge
       Register()                       -> the caller receives KeyEvent signals
       SetHotkeys(a(uus) hotkeys)       -> (modifier mask, level 0 keysym, filter regex)
+      ClearModifiers()                 -> release the physically held modifiers, so
+                                          that typed output isn't modified (like
+                                          AutoKey's XTest release on X11)
+      RestoreModifiers()               -> press them again if still held
       signal KeyEvent(u keysym, u shiftedKeysym, u altGrKeysym, u scanCode,
                       b pressed, b repeat, b grabbed, u modifiers,
                       s windowClass, s windowTitle)
@@ -32,6 +36,7 @@
 
 #include <QDBusContext>
 #include <QDBusServiceWatcher>
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QRegularExpression>
@@ -59,6 +64,8 @@ public:
 public Q_SLOTS:
     void Register();
     void SetHotkeys(const QDBusMessage &message);
+    void ClearModifiers();
+    void RestoreModifiers();
     QString Version() const;
 
 private:
@@ -72,4 +79,8 @@ private:
     QDBusServiceWatcher *m_watcher = nullptr;
     QList<AutoKeyHotkey> m_hotkeys;
     QSet<quint32> m_grabbedKeys;
+    // Physically held modifier keys per device, and the ones we released
+    QHash<KWin::InputDevice *, QSet<quint32>> m_heldModifiers;
+    QHash<KWin::InputDevice *, QSet<quint32>> m_clearedModifiers;
+    bool m_emitting = false;
 };

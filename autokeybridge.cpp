@@ -17,6 +17,9 @@
 
 #include <xkbcommon/xkbcommon.h>
 
+#include <chrono>
+#include <linux/input-event-codes.h>
+
 namespace
 {
 const QString s_service = QStringLiteral("org.autokey.KWinBridge");
@@ -48,6 +51,12 @@ AutoKeyBridge::AutoKeyBridge()
         if (service == m_client) {
             clientGone();
         }
+    });
+
+    // Forget unplugged keyboards
+    connect(KWin::input(), &KWin::InputRedirection::deviceRemoved, this, [this](KWin::InputDevice *device) {
+        m_heldModifiers.remove(device);
+        m_clearedModifiers.remove(device);
     });
 
     KWin::input()->installInputEventFilter(this);
@@ -97,6 +106,60 @@ void AutoKeyBridge::SetHotkeys(const QDBusMessage &msg)
     }
     arg.endArray();
     m_hotkeys = hotkeys;
+}
+
+static bool isModifierScanCode(quint32 scanCode)
+{
+    switch (scanCode) {
+    case KEY_LEFTSHIFT:
+    case KEY_RIGHTSHIFT:
+    case KEY_LEFTCTRL:
+    case KEY_RIGHTCTRL:
+    case KEY_LEFTALT:
+    case KEY_RIGHTALT:
+    case KEY_LEFTMETA:
+    case KEY_RIGHTMETA:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static std::chrono::microseconds now()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch());
+}
+
+void AutoKeyBridge::ClearModifiers()
+{
+    for (auto it = m_heldModifiers.cbegin(); it != m_heldModifiers.cend(); ++it) {
+        KWin::InputDevice *device = it.key();
+        for (quint32 scanCode : it.value()) {
+            if (m_clearedModifiers[device].contains(scanCode)) {
+                continue;
+            }
+            m_clearedModifiers[device].insert(scanCode);
+            m_emitting = true;
+            Q_EMIT device->keyChanged(scanCode, KWin::KeyboardKeyState::Released, now(), device);
+            m_emitting = false;
+        }
+    }
+}
+
+void AutoKeyBridge::RestoreModifiers()
+{
+    const auto cleared = std::exchange(m_clearedModifiers, {});
+    for (auto it = cleared.cbegin(); it != cleared.cend(); ++it) {
+        KWin::InputDevice *device = it.key();
+        for (quint32 scanCode : it.value()) {
+            // Only the ones that are still held down
+            if (m_heldModifiers.value(device).contains(scanCode)) {
+                m_emitting = true;
+                Q_EMIT device->keyChanged(scanCode, KWin::KeyboardKeyState::Pressed, now(), device);
+                m_emitting = false;
+            }
+        }
+    }
 }
 
 void AutoKeyBridge::clientGone()
@@ -176,11 +239,29 @@ bool AutoKeyBridge::matchesHotkey(uint modifiers, uint keysym, const QString &wi
 
 bool AutoKeyBridge::keyboardKey(KWin::KeyboardKeyEvent *event)
 {
-    if (m_client.isEmpty() || isSynthetic(event)) {
+    // Our own modifier releases/presses (ClearModifiers/RestoreModifiers) and
+    // synthetic input go straight through
+    if (m_emitting || isSynthetic(event)) {
         return false;
     }
 
     const quint32 scanCode = event->nativeScanCode;
+    if (isModifierScanCode(scanCode)) {
+        if (event->state == KWin::KeyboardKeyState::Pressed) {
+            m_heldModifiers[event->device].insert(scanCode);
+        } else if (event->state == KWin::KeyboardKeyState::Released) {
+            m_heldModifiers[event->device].remove(scanCode);
+            if (m_clearedModifiers[event->device].remove(scanCode)) {
+                // Already released for the clients by ClearModifiers()
+                return true;
+            }
+        }
+    }
+
+    if (m_client.isEmpty()) {
+        return false;
+    }
+
     const bool pressed = event->state != KWin::KeyboardKeyState::Released;
     const bool repeat = event->state == KWin::KeyboardKeyState::Repeated;
     const uint keysym = levelKeysym(scanCode, 0);
