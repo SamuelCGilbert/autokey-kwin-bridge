@@ -53,6 +53,21 @@ AutoKeyBridge::AutoKeyBridge()
         }
     });
 
+    m_monitorWatcher = new QDBusServiceWatcher(this);
+    m_monitorWatcher->setConnection(bus);
+    m_monitorWatcher->setWatchMode(QDBusServiceWatcher::WatchForUnregistration);
+    connect(m_monitorWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this](const QString &service) {
+        m_monitors.remove(service);
+        m_monitorWatcher->removeWatchedService(service);
+    });
+
+    m_motionTimer.setSingleShot(true);
+    connect(&m_motionTimer, &QTimer::timeout, this, [this]() {
+        if (!m_pendingMotion.isEmpty() && !m_monitors.isEmpty()) {
+            sendToMonitors(QStringLiteral("MonitorMotion"), std::exchange(m_pendingMotion, {}));
+        }
+    });
+
     // Forget unplugged keyboards
     connect(KWin::input(), &KWin::InputRedirection::deviceRemoved, this, [this](KWin::InputDevice *device) {
         m_heldModifiers.remove(device);
@@ -162,6 +177,87 @@ void AutoKeyBridge::RestoreModifiers()
     }
 }
 
+void AutoKeyBridge::StartMonitor()
+{
+    const QString service = message().service();
+    if (!m_monitors.contains(service)) {
+        m_monitors.insert(service);
+        m_monitorWatcher->addWatchedService(service);
+    }
+}
+
+void AutoKeyBridge::StopMonitor()
+{
+    const QString service = message().service();
+    m_monitors.remove(service);
+    m_monitorWatcher->removeWatchedService(service);
+}
+
+void AutoKeyBridge::sendToMonitors(const QString &name, const QVariantList &arguments)
+{
+    for (const QString &monitor : std::as_const(m_monitors)) {
+        QDBusMessage signal = QDBusMessage::createTargetedSignal(monitor, s_path, s_interface, name);
+        signal.setArguments(arguments);
+        QDBusConnection::sessionBus().send(signal);
+    }
+}
+
+static uint buttonMask(Qt::MouseButtons buttons)
+{
+    uint mask = 0;
+    if (buttons & Qt::LeftButton) {
+        mask |= 1;
+    }
+    if (buttons & Qt::MiddleButton) {
+        mask |= 2;
+    }
+    if (buttons & Qt::RightButton) {
+        mask |= 4;
+    }
+    return mask;
+}
+
+bool AutoKeyBridge::pointerMotion(KWin::PointerMotionEvent *event)
+{
+    if (m_monitors.isEmpty() || event->warp || isSynthetic(event->device)) {
+        return false;
+    }
+    // Pointer motion can come at 1000 Hz, recorders don't need that. The last
+    // skipped position is sent shortly after, so the final one isn't lost.
+    m_pendingMotion = {event->position.x(), event->position.y(), buttonMask(event->buttons), modifierMask(event->modifiers)};
+    const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(event->timestamp).count();
+    if (now - m_lastMotion < 8) {
+        if (!m_motionTimer.isActive()) {
+            m_motionTimer.start(10);
+        }
+        return false;
+    }
+    m_lastMotion = now;
+    m_motionTimer.stop();
+    sendToMonitors(QStringLiteral("MonitorMotion"), std::exchange(m_pendingMotion, {}));
+    return false;
+}
+
+bool AutoKeyBridge::pointerButton(KWin::PointerButtonEvent *event)
+{
+    if (!m_monitors.isEmpty() && !isSynthetic(event->device)) {
+        sendToMonitors(QStringLiteral("MonitorButton"),
+                       {uint(event->nativeButton), event->state == KWin::PointerButtonState::Pressed, event->position.x(),
+                        event->position.y(), modifierMask(event->modifiers)});
+    }
+    return false;
+}
+
+bool AutoKeyBridge::pointerAxis(KWin::PointerAxisEvent *event)
+{
+    if (!m_monitors.isEmpty() && !isSynthetic(event->device)) {
+        sendToMonitors(QStringLiteral("MonitorAxis"),
+                       {event->orientation == Qt::Vertical, event->delta, int(event->deltaV120), event->position.x(),
+                        event->position.y(), modifierMask(event->modifiers)});
+    }
+    return false;
+}
+
 void AutoKeyBridge::clientGone()
 {
     m_watcher->removeWatchedService(m_client);
@@ -202,11 +298,11 @@ uint AutoKeyBridge::modifierMask(Qt::KeyboardModifiers modifiers) const
     return mask;
 }
 
-bool AutoKeyBridge::isSynthetic(const KWin::KeyboardKeyEvent *event) const
+bool AutoKeyBridge::isSynthetic(const KWin::InputDevice *device) const
 {
     // Keys typed by org_kde_kwin_fake_input (AutoKey's own output) and other
     // virtual devices
-    if (!event->device) {
+    if (!device) {
         return true;
     }
     // For automated tests in a nested KWin, which only has synthetic input
@@ -214,7 +310,7 @@ bool AutoKeyBridge::isSynthetic(const KWin::KeyboardKeyEvent *event) const
     if (acceptSynthetic) {
         return false;
     }
-    const QString name = event->device->name();
+    const QString name = device->name();
     return name.contains(QLatin1String("Fake"), Qt::CaseInsensitive) || name.contains(QLatin1String("Virtual"), Qt::CaseInsensitive);
 }
 
@@ -241,7 +337,7 @@ bool AutoKeyBridge::keyboardKey(KWin::KeyboardKeyEvent *event)
 {
     // Our own modifier releases/presses (ClearModifiers/RestoreModifiers) and
     // synthetic input go straight through
-    if (m_emitting || isSynthetic(event)) {
+    if (m_emitting || isSynthetic(event->device)) {
         return false;
     }
 
@@ -256,6 +352,12 @@ bool AutoKeyBridge::keyboardKey(KWin::KeyboardKeyEvent *event)
                 return true;
             }
         }
+    }
+
+    if (!m_monitors.isEmpty()) {
+        sendToMonitors(QStringLiteral("MonitorKey"),
+                       {scanCode, uint(event->nativeVirtualKey), event->state != KWin::KeyboardKeyState::Released,
+                        event->state == KWin::KeyboardKeyState::Repeated, modifierMask(event->modifiers), event->text});
     }
 
     if (m_client.isEmpty()) {

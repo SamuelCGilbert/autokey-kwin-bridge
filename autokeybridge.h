@@ -27,6 +27,15 @@
                       b pressed, b repeat, b grabbed, u modifiers,
                       s windowClass, s windowTitle)
     Modifier mask: 1 Shift, 2 Control, 4 Alt, 8 Super, 16 AltGr
+
+    Input monitor (for recorders such as OculiX's, which used a global X11
+    input hook): any number of clients, real input only, nothing is consumed.
+      StartMonitor() / StopMonitor()
+      signal MonitorButton(u evdevButton, b pressed, d x, d y, u modifiers)
+      signal MonitorMotion(d x, d y, u buttons, u modifiers)   (at most ~120/s)
+      signal MonitorAxis(b vertical, d delta, i deltaV120, d x, d y, u modifiers)
+      signal MonitorKey(u scanCode, u keysym, b pressed, b repeat, u modifiers, s text)
+    Coordinates are KWin logical coordinates.
 */
 #pragma once
 
@@ -41,6 +50,8 @@
 #include <QObject>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTimer>
+#include <QVariantList>
 
 struct AutoKeyHotkey
 {
@@ -60,19 +71,25 @@ public:
     ~AutoKeyBridge() override;
 
     bool keyboardKey(KWin::KeyboardKeyEvent *event) override;
+    bool pointerMotion(KWin::PointerMotionEvent *event) override;
+    bool pointerButton(KWin::PointerButtonEvent *event) override;
+    bool pointerAxis(KWin::PointerAxisEvent *event) override;
 
 public Q_SLOTS:
     void Register();
     void SetHotkeys(const QDBusMessage &message);
     void ClearModifiers();
     void RestoreModifiers();
+    void StartMonitor();
+    void StopMonitor();
     QString Version() const;
 
 private:
     void clientGone();
+    void sendToMonitors(const QString &name, const QVariantList &arguments);
     uint levelKeysym(quint32 scanCode, int level) const;
     uint modifierMask(Qt::KeyboardModifiers modifiers) const;
-    bool isSynthetic(const KWin::KeyboardKeyEvent *event) const;
+    bool isSynthetic(const KWin::InputDevice *device) const;
     bool matchesHotkey(uint modifiers, uint keysym, const QString &windowClass, const QString &windowTitle) const;
 
     QString m_client;
@@ -83,4 +100,9 @@ private:
     QHash<KWin::InputDevice *, QSet<quint32>> m_heldModifiers;
     QHash<KWin::InputDevice *, QSet<quint32>> m_clearedModifiers;
     bool m_emitting = false;
+    QSet<QString> m_monitors;
+    QDBusServiceWatcher *m_monitorWatcher = nullptr;
+    qint64 m_lastMotion = 0;
+    QVariantList m_pendingMotion;
+    QTimer m_motionTimer;
 };
