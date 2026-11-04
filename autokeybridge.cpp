@@ -195,6 +195,11 @@ void AutoKeyBridge::StopMonitor()
 
 void AutoKeyBridge::sendToMonitors(const QString &name, const QVariantList &arguments)
 {
+    // Keep the order: a delayed (throttled) motion goes out before anything else
+    if (name != QLatin1String("MonitorMotion") && !m_pendingMotion.isEmpty()) {
+        m_motionTimer.stop();
+        sendToMonitors(QStringLiteral("MonitorMotion"), std::exchange(m_pendingMotion, {}));
+    }
     for (const QString &monitor : std::as_const(m_monitors)) {
         QDBusMessage signal = QDBusMessage::createTargetedSignal(monitor, s_path, s_interface, name);
         signal.setArguments(arguments);
