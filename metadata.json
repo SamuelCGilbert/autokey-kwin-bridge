@@ -1,0 +1,9 @@
+{
+    "KPlugin": {
+        "Id": "autokeybridge",
+        "Name": "AutoKey Bridge",
+        "Description": "Gives AutoKey the keyboard events and hotkey grabs it needs on Wayland, without root or uinput",
+        "EnabledByDefault": true,
+        "License": "GPL-3.0-or-later"
+    }
+}
