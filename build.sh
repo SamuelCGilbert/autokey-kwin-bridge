@@ -1,9 +1,10 @@
 #!/bin/bash
 # Build the plugin against the headers of the KWin version that is installed.
-# Usage: SYSROOT=<dir with matching kwin-dev/kf6 headers> ./build.sh
+# Usage: ./build.sh, or SYSROOT=<dir with matching kwin-dev/kf6 headers> ./build.sh
+# without those packages installed. CMake is the usual way to build (see README).
 set -eu
 cd "$(dirname "$0")"
-SR=${SYSROOT:-$HOME/src/x11-to-wayland/sysroot}
+SR=${SYSROOT:-}
 OUT=${OUT:-build/$(dpkg-query -W -f='${Version}' kwin-wayland | sed 's/[^A-Za-z0-9.]/_/g')}
 mkdir -p "$OUT"
 MOC=/usr/lib/qt6/libexec/moc
