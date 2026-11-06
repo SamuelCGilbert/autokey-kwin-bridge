@@ -14,7 +14,7 @@ It runs inside KWin and offers the `org.autokey.KWinBridge` D-Bus interface:
 | `StartMonitor` / `StopMonitor` | Send all input, for recorders |
 
 AutoKey connects to it automatically when the plugin is loaded, and otherwise falls
-back to uinput. [kwin-input](https://github.com/TheSquanch-147/kwin-input) uses it
+back to uinput. [kwin-input](https://github.com/SamuelCGilbert/kwin-input) uses it
 too, for `monitor` and `--clearmodifiers`.
 
 **Any program on your session bus can use this interface while the plugin is loaded,
