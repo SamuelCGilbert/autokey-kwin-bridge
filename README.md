@@ -1,6 +1,6 @@
 # AutoKey KWin Bridge
 
-A KWin plugin that gives [AutoKey](https://github.com/dlk3/autokey-wayland) what it
+A KWin plugin that gives [AutoKey](https://github.com/SamuelCGilbert/autokey-wayland) what it
 needs on KDE Plasma Wayland, without root or uinput: the keyboard events and hotkey
 grabs that Wayland keeps from normal clients.
 
@@ -16,6 +16,9 @@ It runs inside KWin and offers the `org.autokey.KWinBridge` D-Bus interface:
 AutoKey connects to it automatically when the plugin is loaded, and otherwise falls
 back to uinput. [kwin-input](https://github.com/SamuelCGilbert/kwin-input) uses it
 too, for `monitor` and `--clearmodifiers`.
+
+Only [this fork of AutoKey for Wayland](https://github.com/SamuelCGilbert/autokey-wayland)
+uses the bridge. The official AutoKey for Wayland doesn't.
 
 **Any program on your session bus can use this interface while the plugin is loaded,
 which includes reading what you type.** Only install it if you're comfortable with
